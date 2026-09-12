@@ -36,5 +36,12 @@ services:
     depends_on:
       api:
         condition: service_healthy
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_healthy
 volumes:
   gateway_db:

@@ -1,0 +1,20 @@
+import React, { useEffect, useState } from 'react'
+import { useApp } from '../App.jsx'
+import { Badge, Empty, ErrorBox, Field, Icon, Loading, Modal, SectionTitle } from '../ui.jsx'
+
+export default function Budgets() {
+  const { api, notify } = useApp()
+  const [budgets, setBudgets] = useState(null)
+  const [agents, setAgents] = useState([])
+  const [editing, setEditing] = useState(false)
+  const [form, setForm] = useState({ agent_id: '00000000-0000-0000-0000-000000000010', model: 'mock-secure-v1', request_limit: 100, token_limit: 10000 })
+  const [error, setError] = useState(null)
+  const load = () => Promise.all([api('/budgets'), api('/agents')]).then(([b, a]) => { setBudgets(b); setAgents(a) }).catch(setError)
+  useEffect(() => { load() }, [])
+  const save = async e => { e.preventDefault(); try { await api('/budgets', { method: 'PUT', body: { ...form, request_limit: Number(form.request_limit), token_limit: Number(form.token_limit) } }); notify('Usage limits saved'); setEditing(false); load() } catch (err) { notify(err.message, 'error') } }
+  return <>
+    <SectionTitle eyebrow="Race-safe enforcement" title="Usage controls" description="Inspect daily request and token counters updated atomically before provider work." actions={<button className="button button-primary" onClick={() => setEditing(true)}><Icon name="plus"/>Configure limit</button>}/>
+    {error ? <ErrorBox error={error} retry={load}/> : budgets === null ? <Loading/> : budgets.length ? <div className="card-grid">{budgets.map(bucket => { const requests = Math.min(100, bucket.used_requests / bucket.request_limit * 100); const tokens = Math.min(100, bucket.used_tokens / bucket.token_limit * 100); return <article className="entity-card budget-card" key={bucket.id}><div className="entity-top"><div className="entity-icon"><Icon name="budgets"/></div><Badge value={requests >= 90 || tokens >= 90 ? 'NEAR_LIMIT' : 'HEALTHY'}/></div><h2>{agents.find(a => a.id === bucket.agent_id)?.name || bucket.agent_id.slice(0, 8)}</h2><code>{bucket.model}</code><div className="meter-block"><div><span>Requests</span><strong>{bucket.used_requests} / {bucket.request_limit}</strong></div><div className="meter"><i style={{ width: `${requests}%` }}/></div></div><div className="meter-block"><div><span>Estimated tokens</span><strong>{bucket.used_tokens.toLocaleString()} / {bucket.token_limit.toLocaleString()}</strong></div><div className="meter"><i style={{ width: `${tokens}%` }}/></div></div><button className="button button-small" onClick={() => { setForm({ agent_id: bucket.agent_id, model: bucket.model, request_limit: bucket.request_limit, token_limit: bucket.token_limit }); setEditing(true) }}>Edit limits</button></article> })}</div> : <Empty title="No usage recorded" detail="A bucket is created automatically when an agent submits its first tool proposal." action={<button className="button button-primary" onClick={() => setEditing(true)}>Configure first limit</button>}/>}
+    {editing && <Modal title="Configure daily limit" subtitle="Current usage is retained when limits change." onClose={() => setEditing(false)} footer={<><button className="button button-ghost" onClick={() => setEditing(false)}>Cancel</button><button className="button button-primary" form="budget-form">Save limits</button></>}><form id="budget-form" className="form-stack" onSubmit={save}><Field label="Agent"><select value={form.agent_id} onChange={e => setForm({ ...form, agent_id: e.target.value })}>{agents.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field><Field label="Model"><input value={form.model} readOnly/></Field><div className="form-row"><Field label="Request limit"><input type="number" min="1" value={form.request_limit} onChange={e => setForm({ ...form, request_limit: e.target.value })}/></Field><Field label="Token limit"><input type="number" min="1" value={form.token_limit} onChange={e => setForm({ ...form, token_limit: e.target.value })}/></Field></div></form></Modal>}
+  </>
+}

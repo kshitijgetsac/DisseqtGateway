@@ -18,6 +18,18 @@ def claim_job(db: Session, worker_id: str) -> str | None:
     if not job:
         return None
     req = db.scalar(select(ActionRequest).where(ActionRequest.id == job.request_id).with_for_update())
+    if job.status == "RUNNING":
+        expired_attempt = db.scalar(select(ExecutionAttempt).where(
+            ExecutionAttempt.request_id == job.request_id,
+            ExecutionAttempt.attempt_number == job.attempt_count,
+        ).with_for_update())
+        if expired_attempt and expired_attempt.status == "RUNNING":
+            expired_attempt.status = "LEASE_EXPIRED"
+            expired_attempt.completed_at = current
+            expired_attempt.error_code = "WORKER_LEASE_EXPIRED"
+        audit(db, "WORKER_LEASE_EXPIRED", request=req, actor_type="WORKER", actor_id=job.worker_id,
+              details={"attempt_number": job.attempt_count,
+                       "lease_until": job.lease_until.isoformat() if job.lease_until else None})
     if not reevaluate_before_execution(db, req, job):
         db.commit()
         return None

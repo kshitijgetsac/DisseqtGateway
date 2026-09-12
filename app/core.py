@@ -157,7 +157,14 @@ def submit_tool_call(db: Session, agent: Agent, body: ToolCallIn, key: str) -> d
         initial_policy_version_id=version.id, current_policy_version_id=version.id,
         reason_code=outcome["reason_code"], reason=outcome["reason"])
     db.add(req)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(select(ActionRequest).where(ActionRequest.agent_id == agent.id, ActionRequest.idempotency_key == key))
+        if not existing or existing.request_digest != request_digest:
+            raise GatewayError(409, "IDEMPOTENCY_KEY_REUSED", "This key was used for a different request.")
+        return request_view(db, existing)
     decision_event = audit(db, "POLICY_EVALUATED", request=req, policy_version_id=version.id,
         decision=outcome["decision"], reason_code=outcome["reason_code"],
         details={"mode": "LIVE", "facts": facts, "matched_rule_ids": outcome["matched_rule_ids"],

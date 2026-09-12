@@ -10,7 +10,7 @@ Requirements: Docker Desktop with Docker Compose.
 docker compose up --build
 ```
 
-The API is available at `http://localhost:8000`, with interactive OpenAPI documentation at `http://localhost:8000/docs`. PostgreSQL data is stored in the `gateway_db` Docker volume and survives container restarts.
+The frontend is available at `http://localhost:3000`, the API at `http://localhost:8000`, and interactive OpenAPI documentation at `http://localhost:8000/docs`. PostgreSQL data is stored in the `gateway_db` Docker volume and survives container restarts. Open the frontend over HTTP; a direct `file://` URL does not run the Vite React module graph.
 
 Import [the Postman collection](postman/DisseqtGateway.postman_collection.json) and run its folders in numeric order. The collection contains the seeded local credentials and captures request, approval, and policy-version IDs as it runs.
 
@@ -34,7 +34,7 @@ docker compose up --build
 
 ## Architecture
 
-This is a modular MVC-style monolith with one separately launched worker that reuses the same model and service code:
+This is a modular MVC-style monolith with one separately launched worker and a static React frontend:
 
 ```text
 React/Postman/Agent
@@ -49,6 +49,8 @@ PostgreSQL  <----------  Python worker (app/worker.py)
                               |
                         allowlisted mock adapters
 ```
+
+The frontend is a Vite React application in `frontend/`. Its pages cover the dashboard, deterministic agent playground, approvals, agent and tool registries, policy versions, audit explorer, replay, and usage controls. The production container serves the built SPA with Nginx and proxies `/api` to FastAPI.
 
 `app/contracts.py` defines request and response-facing validation models. Controllers handle HTTP concerns; service modules implement gateway decisions; SQLAlchemy models own persistence. Components remain modules in one codebase to keep the POC easy to understand and run.
 
@@ -92,9 +94,11 @@ The supplied contract covered the core gateway, approvals, registries, versioned
 
 No supplied endpoint is redundant. Dedicated activate/deactivate actions keep lifecycle changes auditable and prevent a broad `PATCH` from silently changing active state. Policy simulation and request replay look similar but serve different inputs: simulation evaluates hypothetical facts, while replay uses a historical request snapshot.
 
-Potential frontend additions can wait until the UI contract is designed: paginated request listing and a dedicated worker-recovery action for demonstrations. Neither is necessary to exercise the backend workflows through the current Postman collection.
+The frontend exposes the same workflows visually: scenario execution, pending approval review, agent and tool lifecycle, policy version activation, audit filtering, replay, and budget inspection. A paginated request listing and a dedicated worker-recovery action remain optional enhancements for a larger production console; they are not required to exercise the POC through the current UI or Postman collection.
 
 ## Tests
+
+The candidate-run manual scenarios and their observed outcomes are recorded in [docs/TEST_RESULTS.md](docs/TEST_RESULTS.md). All three end-to-end validation groups passed: policy behavior and version changes; concurrency, retries, and budgets; and AI security with replay isolation.
 
 Run the local suite:
 
@@ -102,7 +106,7 @@ Run the local suite:
 python3 -m pytest -q
 ```
 
-The suite covers policy priority and effect precedence, authentication/authorization, malformed arguments, idempotency, approval resolution, budget enforcement, untrusted classification, sensitive-data exfiltration, worker duplicate prevention, policy changes before execution, and replay isolation.
+The suite covers policy priority and effect precedence, default deny, authentication and authorization, agent and tool lifecycle, key rotation, malformed arguments, idempotency, approval expiry and resolution, budget enforcement, untrusted classification, sensitive-data exfiltration, simulation and replay isolation, worker retries and lease recovery, stale-worker fencing, and policy changes before execution.
 
 PostgreSQL provides the production POC's row-lock semantics. SQLite is used only as a fast local test database; it does not emulate PostgreSQL row-level locking. Approval and idempotency race demonstrations should therefore be run against the Compose environment.
 
@@ -116,6 +120,8 @@ docker compose run --rm \
 ```
 
 The test fixture recreates every table in `gateway_test`, so never point `TEST_DATABASE_URL` at a database containing data.
+
+The complete suite currently contains 38 tests. Six PostgreSQL-only tests exercise concurrent approval resolution, duplicate approval, atomic budget exhaustion, identical and conflicting idempotency-key races, and competing worker claims.
 
 ## AI usage
 

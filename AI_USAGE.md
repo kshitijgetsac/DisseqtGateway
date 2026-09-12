@@ -16,8 +16,11 @@ Codex contributed the following work:
 - Implemented the PostgreSQL-backed worker with short job leases, `SELECT FOR UPDATE SKIP LOCKED`, retry records, policy re-evaluation before execution, and idempotent mock message delivery.
 - Added seed data for users, agents, tools, permissions, policies, mock documents, and customers.
 - Created the Docker and Compose configuration and the executable Postman collection.
-- Wrote automated tests for policy precedence, authorization, user impersonation, malformed calls, idempotency, prompt injection, sensitive-data transfer, approvals, execution deduplication, lease recovery, policy changes, replay isolation, budgets, and PostgreSQL race behavior.
-- Ran and debugged the application locally. The final suite passed all 16 tests against PostgreSQL, including concurrent approval and budget tests, and an end-to-end request completed through the API, queue, worker, mock adapter, and audit trail.
+- Implemented the React/Vite frontend for the POC, including the gateway overview, agent playground, approval review queue, agent and tool registries, policy version management, audit explorer, policy replay, and request/token budget controls.
+- Added the frontend API client, demo identity switcher, redacted review views, lifecycle and approval actions, responsive styling, Nginx static serving, and the Compose `frontend` service on port 3000.
+- Smoke-tested every frontend route against the running FastAPI/PostgreSQL stack and fixed route-unmount handling so API-loading effects do not leave stale Promise cleanups in React.
+- Wrote automated tests for policy precedence and default deny, authentication, authorization, lifecycle controls, key rotation, user impersonation, malformed calls, idempotency, prompt injection, sensitive-data transfer, approval rejection and expiry, execution deduplication, retries, lease recovery, stale workers, policy changes, simulation and replay isolation, budgets, and PostgreSQL race behavior.
+- Expanded the suite to 38 tests and ran all of them against PostgreSQL. The added concurrency coverage exposed and fixed a simultaneous idempotency-key race; worker recovery was also updated to close expired attempts and record the lease loss in the audit trail.
 - Wrote the README, architecture notes, POC assumptions, security limitations, setup steps, and test instructions.
 
 ## Human review and submission
