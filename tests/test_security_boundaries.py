@@ -197,3 +197,12 @@ def test_approval_views_redact_message_content(client, agent_headers, admin_head
     approval = client.get(f"/api/v1/approvals/{created['approval_id']}", headers=admin_headers)
     assert approval.status_code == 200
     assert approval.json()["arguments"] == {"destination": "partner@example.com", "message": "[REDACTED]"}
+
+
+def test_audit_text_search_accepts_action_id(client, agent_headers, admin_headers):
+    created = client.post("/api/v1/tool-calls", headers={**agent_headers, "Idempotency-Key": "audit-action-search"},
+        json=tool_call()).json()
+    response = client.get(f"/api/v1/audit-events?q={created['request_id']}", headers=admin_headers)
+    assert response.status_code == 200
+    assert response.json()["items"]
+    assert {event["request_id"] for event in response.json()["items"]} == {created["request_id"]}

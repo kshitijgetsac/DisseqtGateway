@@ -56,7 +56,9 @@ The frontend is a Vite React application in `frontend/`. Its pages cover the das
 
 `app/contracts.py` defines request and response-facing validation models. Controllers handle HTTP concerns; service modules implement gateway decisions; SQLAlchemy models own persistence. Components remain modules in one codebase to keep the POC easy to understand and run.
 
-The worker uses `SELECT ... FOR UPDATE SKIP LOCKED`, commits a short lease before execution, and records each attempt. Directly allowed and human-approved requests enter the same execution path. The mock message adapter stores the request ID as a unique idempotency key, so retrying a job cannot create a second message.
+The worker uses `SELECT ... FOR UPDATE SKIP LOCKED`, commits a short lease before execution, and records each attempt. Directly allowed and human-approved requests enter the same execution path. Immediately before calling an adapter, the worker locks and rechecks the agent, user, tool, ownership, and agent-tool permission. Revoked authorization cancels the attempt without performing the side effect. The mock message adapter stores the request ID as a unique idempotency key, so retrying a job cannot create a second message.
+
+Each worker tick also expires overdue approvals. Rejected or expired approvals remove any dormant `AWAITING_APPROVAL` execution job while preserving the action request and append-oriented audit explanation.
 
 For a real external tool, the adapter must pass the stable request ID to an idempotency-aware provider. If the provider cannot offer idempotency or reconciliation, a crash after the external side effect and before its receipt is recorded must end as `OUTCOME_UNKNOWN`, not an unsafe automatic retry.
 
@@ -96,7 +98,7 @@ The supplied contract covered the core gateway, approvals, registries, versioned
 
 No supplied endpoint is redundant. Dedicated activate/deactivate actions keep lifecycle changes auditable and prevent a broad `PATCH` from silently changing active state. Policy simulation and request replay look similar but serve different inputs: simulation evaluates hypothetical facts, while replay uses a historical request snapshot.
 
-The frontend exposes the same workflows visually: scenario execution, pending approval review, agent and tool lifecycle, policy version activation, audit filtering, replay, and budget inspection. A paginated request listing and a dedicated worker-recovery action remain optional enhancements for a larger production console; they are not required to exercise the POC through the current UI or Postman collection.
+The frontend exposes the same workflows visually: scenario execution, pending approval review, agent and tool lifecycle, policy version activation, audit filtering, replay, and budget inspection. Action IDs are displayed in full and the audit explorer searches by action ID or reason code. A paginated request listing and a dedicated worker-recovery action remain optional enhancements for a larger production console; they are not required to exercise the POC through the current UI or Postman collection.
 
 ## Tests
 
@@ -108,7 +110,7 @@ Run the local suite:
 python3 -m pytest -q
 ```
 
-The suite covers policy priority and effect precedence, default deny, authentication and authorization, agent and tool lifecycle, key rotation, malformed arguments, idempotency, approval expiry and resolution, budget enforcement, untrusted classification, sensitive-data exfiltration, simulation and replay isolation, worker retries and lease recovery, stale-worker fencing, and policy changes before execution.
+The suite covers policy priority and effect precedence, default deny, authentication and authorization, agent and tool lifecycle, key rotation, malformed arguments, idempotency, approval expiry and resolution, stale-job cleanup, budget enforcement, untrusted classification, sensitive-data exfiltration, simulation and replay isolation, worker retries and lease recovery, stale-worker fencing, permission revocation before execution, and policy changes before execution.
 
 PostgreSQL provides the production POC's row-lock semantics. SQLite is used only as a fast local test database; it does not emulate PostgreSQL row-level locking. Approval and idempotency race demonstrations should therefore be run against the Compose environment.
 
@@ -123,7 +125,7 @@ docker compose run --rm \
 
 The test fixture recreates every table in `gateway_test`, so never point `TEST_DATABASE_URL` at a database containing data.
 
-The complete suite currently contains 38 tests. Six PostgreSQL-only tests exercise concurrent approval resolution, duplicate approval, atomic budget exhaustion, identical and conflicting idempotency-key races, and competing worker claims.
+The complete suite currently contains 42 tests. Six PostgreSQL-only tests exercise concurrent approval resolution, duplicate approval, atomic budget exhaustion, identical and conflicting idempotency-key races, and competing worker claims.
 
 ## AI usage
 

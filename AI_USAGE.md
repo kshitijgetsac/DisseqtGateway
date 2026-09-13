@@ -20,7 +20,8 @@ Codex contributed the following work:
 - Added the frontend API client, demo identity switcher, redacted review views, lifecycle and approval actions, responsive styling, Nginx static serving, and the Compose `frontend` service on port 3000.
 - Smoke-tested every frontend route against the running FastAPI/PostgreSQL stack and fixed route-unmount handling so API-loading effects do not leave stale Promise cleanups in React.
 - Wrote automated tests for policy precedence and default deny, authentication, authorization, lifecycle controls, key rotation, user impersonation, malformed calls, idempotency, prompt injection, sensitive-data transfer, approval rejection and expiry, execution deduplication, retries, lease recovery, stale workers, policy changes, simulation and replay isolation, budgets, and PostgreSQL race behavior.
-- Expanded the suite to 38 tests and ran all of them against PostgreSQL. The added concurrency coverage exposed and fixed a simultaneous idempotency-key race; worker recovery was also updated to close expired attempts and record the lease loss in the audit trail.
+- Expanded the suite to 42 tests. The added coverage includes simultaneous idempotency-key races, stale approval-job cleanup, action-ID audit search, and revocation of agent permissions after a worker claim but before execution. Worker recovery closes expired attempts and records the lease loss in the audit trail.
+- Updated the frontend to display complete action IDs and search audit events by action ID or reason code.
 - Wrote the README, architecture notes, POC assumptions, security limitations, setup steps, and test instructions.
 
 ## Human review and submission

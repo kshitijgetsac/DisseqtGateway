@@ -109,7 +109,7 @@ td strong { color: #273248; font-size: 11px; }
 .row-actions { display: flex; align-items: center; gap: 5px; white-space: nowrap; }
 .nowrap { white-space: nowrap; }
 .muted { color: var(--muted); }
-.copy-id { border: 0; padding: 0; color: #475671; background: none; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; }
+.copy-id { max-width: 100%; border: 0; padding: 0; color: #475671; background: none; font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; overflow-wrap: anywhere; text-align: left; }
 .copy-id:hover { color: var(--blue); text-decoration: underline; }
 .badge { width: fit-content; display: inline-flex; align-items: center; padding: 4px 7px; border-radius: 5px; color: #536079; background: #edf0f5; font-size: 8px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .badge-allow, .badge-active, .badge-approved, .badge-succeeded, .badge-healthy { color: var(--green); background: var(--green-soft); }

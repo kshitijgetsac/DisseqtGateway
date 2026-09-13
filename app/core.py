@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .contracts import ToolCallIn
@@ -89,6 +89,19 @@ def request_view(db: Session, req: ActionRequest) -> dict:
             "approval_id": approval.id if approval and approval.status == "PENDING" else None,
             "approval_status": approval.status if approval else None,
             "execution": {"status": job.status, "attempt_count": job.attempt_count, "result": redacted(job.result)} if job else None}
+
+
+def cleanup_execution_job(db: Session, req: ActionRequest, reason_code: str) -> bool:
+    """Remove a non-executable job while preserving the request and audit history."""
+    job = db.scalar(select(ExecutionJob).where(ExecutionJob.request_id == req.id).with_for_update())
+    if not job:
+        return False
+    previous_status = job.status
+    db.execute(delete(ExecutionAttempt).where(ExecutionAttempt.request_id == req.id))
+    db.delete(job)
+    audit(db, "EXECUTION_JOB_CLEANED_UP", request=req, reason_code=reason_code,
+          details={"previous_status": previous_status})
+    return True
 
 
 def submit_tool_call(db: Session, agent: Agent, body: ToolCallIn, key: str) -> dict:
@@ -199,6 +212,7 @@ def resolve_approval(db: Session, approval_id: str, user: User, approve: bool, n
     if approval.expires_at.replace(tzinfo=timezone.utc) <= now():
         approval.status = "EXPIRED"
         req.status = "EXPIRED"
+        cleanup_execution_job(db, req, "APPROVAL_EXPIRED")
         audit(db, "APPROVAL_EXPIRED", request=req, actor_type="HUMAN", actor_id=user.id)
         db.commit()
         raise GatewayError(409, "APPROVAL_EXPIRED", "Approval has expired.", req.id)
@@ -216,6 +230,8 @@ def resolve_approval(db: Session, approval_id: str, user: User, approve: bool, n
         elif job.status == "AWAITING_APPROVAL":
             job.status = "PENDING"
             job.next_attempt_at = None
+    else:
+        cleanup_execution_job(db, req, "APPROVAL_REJECTED")
     audit(db, "APPROVAL_APPROVED" if approve else "APPROVAL_REJECTED", request=req,
           actor_type="HUMAN", actor_id=user.id, policy_version_id=req.current_policy_version_id,
           details={"approval_id": approval.id, "note": note})

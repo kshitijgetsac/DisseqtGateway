@@ -4,7 +4,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 from ..contracts import AgentIn, AgentPatch, AgentRunIn, BudgetIn, NoteIn, PermissionIn, PolicyVersionIn, ReplayIn, SimulateIn, ToolCallIn, ToolIn, ToolPatch
 from ..core import active_policy, audit, digest, redacted, request_view, resolve_approval, submit_tool_call
@@ -191,7 +191,7 @@ def get_agent(agent_id: str, x_demo_user_id: str | None = Header(None), db: Sess
 @app.patch("/api/v1/agents/{agent_id}")
 def patch_agent(agent_id: str, body: AgentPatch, x_demo_user_id: str | None = Header(None), db: Session = Depends(get_db)):
     user = require_human(db, x_demo_user_id, {"ADMIN"})
-    agent = db.get(Agent, agent_id)
+    agent = db.scalar(select(Agent).where(Agent.id == agent_id).with_for_update())
     if not agent: raise GatewayError(404, "AGENT_NOT_FOUND", "Agent not found.")
     if body.owner_id:
         if not db.get(User, body.owner_id): raise GatewayError(404, "USER_NOT_FOUND", "Owner not found.")
@@ -205,7 +205,7 @@ def patch_agent(agent_id: str, body: AgentPatch, x_demo_user_id: str | None = He
 @app.post("/api/v1/agents/{agent_id}/{action}")
 def agent_action(agent_id: str, action: str, x_demo_user_id: str | None = Header(None), db: Session = Depends(get_db)):
     user = require_human(db, x_demo_user_id, {"ADMIN"})
-    agent = db.get(Agent, agent_id)
+    agent = db.scalar(select(Agent).where(Agent.id == agent_id).with_for_update())
     if not agent: raise GatewayError(404, "AGENT_NOT_FOUND", "Agent not found.")
     if action not in {"activate", "deactivate", "rotate-key"}: raise GatewayError(404, "ACTION_NOT_FOUND", "Unknown agent action.")
     result = {}
@@ -220,7 +220,7 @@ def agent_action(agent_id: str, action: str, x_demo_user_id: str | None = Header
 @app.put("/api/v1/agents/{agent_id}/permissions")
 def put_permissions(agent_id: str, body: PermissionIn, x_demo_user_id: str | None = Header(None), db: Session = Depends(get_db)):
     user = require_human(db, x_demo_user_id, {"ADMIN"})
-    agent = db.get(Agent, agent_id)
+    agent = db.scalar(select(Agent).where(Agent.id == agent_id).with_for_update())
     if not agent: raise GatewayError(404, "AGENT_NOT_FOUND", "Agent not found.")
     if len(body.tool_ids) != len(set(body.tool_ids)) or any(not db.get(Tool, t) for t in body.tool_ids):
         raise GatewayError(422, "INVALID_PERMISSIONS", "Tool IDs must be valid and unique.")
@@ -263,7 +263,7 @@ def get_tool(tool_id: str, x_demo_user_id: str | None = Header(None), db: Sessio
 @app.patch("/api/v1/tools/{tool_id}")
 def patch_tool(tool_id: str, body: ToolPatch, x_demo_user_id: str | None = Header(None), db: Session = Depends(get_db)):
     user = require_human(db, x_demo_user_id, {"ADMIN"})
-    tool = db.get(Tool, tool_id)
+    tool = db.scalar(select(Tool).where(Tool.id == tool_id).with_for_update())
     if not tool: raise GatewayError(404, "TOOL_NOT_FOUND", "Tool not found.")
     values = body.model_dump(exclude_unset=True, by_alias=False)
     if values.get("schema_") is not None: validate_tool_schema(values["schema_"])
@@ -276,7 +276,7 @@ def patch_tool(tool_id: str, body: ToolPatch, x_demo_user_id: str | None = Heade
 @app.post("/api/v1/tools/{tool_id}/{action}")
 def tool_action(tool_id: str, action: str, x_demo_user_id: str | None = Header(None), db: Session = Depends(get_db)):
     user = require_human(db, x_demo_user_id, {"ADMIN"})
-    tool = db.get(Tool, tool_id)
+    tool = db.scalar(select(Tool).where(Tool.id == tool_id).with_for_update())
     if not tool: raise GatewayError(404, "TOOL_NOT_FOUND", "Tool not found.")
     if action not in {"activate", "deactivate"}: raise GatewayError(404, "ACTION_NOT_FOUND", "Unknown tool action.")
     tool.active = action == "activate"
@@ -363,7 +363,8 @@ def audit_events(request_id: str | None = Query(None, alias="request"), agent: s
         if value: stmt = stmt.where(column == value)
     if before: stmt = stmt.where(AuditEvent.created_at < before)
     if after: stmt = stmt.where(AuditEvent.created_at > after)
-    if q: stmt = stmt.where(AuditEvent.reason_code.contains(q))
+    if q:
+        stmt = stmt.where(or_(AuditEvent.request_id.contains(q), AuditEvent.reason_code.contains(q)))
     if cursor: stmt = stmt.where(AuditEvent.id > cursor)
     rows = db.scalars(stmt.order_by(AuditEvent.id).limit(limit + 1)).all()
     return {"items": [event_json(e) for e in rows[:limit]], "next_cursor": rows[limit].id if len(rows) > limit else None}

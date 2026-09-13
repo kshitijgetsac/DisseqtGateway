@@ -112,7 +112,7 @@ POST /approvals/{approval_id}/approve
 POST /approvals/{approval_id}/reject
 ```
 
-`GET /approvals` supports `status`, `agent_id`, `tool_id`, `before`, `after`, `limit`, and `cursor`. Resolution accepts `{"note": "..."}`. If another resolver wins, the losing request returns `409 APPROVAL_ALREADY_RESOLVED` with the existing state.
+`GET /approvals` supports `status`, `agent_id`, `tool_id`, `before`, `after`, `limit`, and `cursor`. Resolution accepts `{"note": "..."}`. If another resolver wins, the losing request returns `409 APPROVAL_ALREADY_RESOLVED` with the existing state. Rejection and expiry remove any dormant execution job that can no longer be released; the action request and audit events remain available.
 
 ## Registry endpoints
 
@@ -163,7 +163,7 @@ GET  /audit-events/{event_id}
 POST /requests/{request_id}/replays
 ```
 
-Audit filtering supports request, agent, user, tool, event type, decision, risk, policy version, date range, text query, limit, and cursor. Replay accepts a `target_policy_version_id`, reports the original and replay decisions, appends a replay event, and always returns `execution_performed: false`.
+Audit filtering supports request, agent, user, tool, event type, decision, risk, policy version, date range, text query, limit, and cursor. The text query matches action request IDs and reason codes. Replay accepts a `target_policy_version_id`, reports the original and replay decisions, appends a replay event, and always returns `execution_performed: false`.
 
 ## Usage and execution inspection
 

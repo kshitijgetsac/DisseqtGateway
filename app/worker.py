@@ -3,9 +3,46 @@ import time
 from datetime import timedelta, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
-from .core import audit, reevaluate_before_execution
+from .core import audit, cleanup_execution_job, reevaluate_before_execution
 from .db import Base, SessionLocal, engine
-from .models import ActionRequest, ExecutionAttempt, ExecutionJob, MockCustomer, MockDocument, MockMessage, Tool, WorkerHeartbeat, now
+from .models import Agent, AgentToolPermission, ActionRequest, Approval, ExecutionAttempt, ExecutionJob, MockCustomer, MockDocument, MockMessage, Tool, User, WorkerHeartbeat, now
+
+
+def cleanup_expired_approvals(db: Session) -> int:
+    """Expire pending approvals and remove jobs that can no longer execute."""
+    current = now()
+    approvals = db.scalars(select(Approval).where(
+        Approval.status == "PENDING", Approval.expires_at <= current,
+    ).with_for_update(skip_locked=True)).all()
+    for approval in approvals:
+        req = db.scalar(select(ActionRequest).where(ActionRequest.id == approval.request_id).with_for_update())
+        approval.status = "EXPIRED"
+        req.status = "EXPIRED"
+        cleanup_execution_job(db, req, "APPROVAL_EXPIRED")
+        audit(db, "APPROVAL_EXPIRED", request=req, details={"approval_id": approval.id})
+    if approvals:
+        db.commit()
+    return len(approvals)
+
+
+def execution_authorization_failure(db: Session, req: ActionRequest) -> str | None:
+    """Recheck mutable authorization immediately before the adapter side effect."""
+    agent = db.scalar(select(Agent).where(Agent.id == req.agent_id).with_for_update())
+    user = db.scalar(select(User).where(User.id == req.user_id).with_for_update())
+    tool = db.scalar(select(Tool).where(Tool.id == req.tool_id).with_for_update())
+    if not agent or not agent.active:
+        return "AGENT_DISABLED"
+    if not user or not user.active:
+        return "USER_DISABLED"
+    if agent.owner_id != user.id:
+        return "AGENT_USER_DELEGATION_REVOKED"
+    if not tool or not tool.active:
+        return "TOOL_DISABLED"
+    permission = db.scalar(select(AgentToolPermission).where(
+        AgentToolPermission.agent_id == agent.id,
+        AgentToolPermission.tool_id == tool.id,
+    ).with_for_update())
+    return None if permission else "AGENT_TOOL_PERMISSION_REVOKED"
 
 
 def claim_job(db: Session, worker_id: str) -> str | None:
@@ -82,6 +119,19 @@ def finish_job(db: Session, request_id: str, worker_id: str):
     req = db.scalar(select(ActionRequest).where(ActionRequest.id == request_id).with_for_update())
     attempt = db.scalar(select(ExecutionAttempt).where(ExecutionAttempt.request_id == request_id,
         ExecutionAttempt.attempt_number == job.attempt_count))
+    authorization_failure = execution_authorization_failure(db, req)
+    if authorization_failure:
+        req.status = "CANCELLED"
+        job.status = "CANCELLED"
+        job.last_error = authorization_failure
+        job.lease_until = None
+        attempt.status = "CANCELLED"
+        attempt.completed_at = now()
+        attempt.error_code = authorization_failure
+        audit(db, "EXECUTION_AUTHORIZATION_REVOKED", request=req, actor_type="WORKER", actor_id=worker_id,
+              reason_code=authorization_failure, details={"attempt_number": job.attempt_count})
+        db.commit()
+        return
     try:
         # Mock side effect and receipt commit together. Real external adapters would
         # require their own idempotency key or an OUTCOME_UNKNOWN reconciliation path.
@@ -117,6 +167,7 @@ def tick(worker_id="worker-1") -> bool:
             db.add(heartbeat)
         heartbeat.last_seen_at = now()
         db.commit()
+        cleanup_expired_approvals(db)
         request_id = claim_job(db, worker_id)
     if not request_id:
         return False

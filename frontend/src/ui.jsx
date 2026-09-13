@@ -51,10 +51,9 @@ export function Modal({ title, subtitle, onClose, children, footer, wide = false
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose() }}><div className={`modal ${wide ? 'modal-wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div><button className="icon-button" aria-label="Close" onClick={onClose}><Icon name="close"/></button></div><div className="modal-body">{children}</div>{footer && <div className="modal-footer">{footer}</div>}</div></div>
 }
 
-export function shortId(value) { return value ? `${String(value).slice(0, 8)}…` : '—' }
 export function fmtTime(value) { return value ? new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—' }
 export function pretty(value) { return JSON.stringify(value, null, 2) }
 
 export function CopyId({ value }) {
-  return <button className="copy-id" title="Copy ID" onClick={() => navigator.clipboard?.writeText(value)}>{shortId(value)}</button>
+  return <button className="copy-id" title="Copy ID" aria-label={`Copy ID ${value || ''}`} onClick={() => navigator.clipboard?.writeText(value)}>{value || '—'}</button>
 }
