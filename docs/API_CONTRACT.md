@@ -101,7 +101,7 @@ Returns current request state, initial decision, approval summary, execution sum
 }
 ```
 
-The deterministic provider returns a fixed tool proposal for the scenario. The backend sends the proposal through the same gateway service as `POST /tool-calls`. Supported scenarios include safe search, unauthorized updates, high-risk approval, indirect prompt injection, external sensitive-data transfer, malformed arguments, and provider unavailability.
+After human and agent authorization, the endpoint atomically reserves an `LLM_PROVIDER` budget before invoking the deterministic provider. Successful calls reconcile to deterministic actual usage. Provider outages charge input tokens and release the reserved output allowance. The resulting proposal then enters the same validation, authorization, policy, approval, and execution flow as `POST /tool-calls`, including its separate `GATEWAY_ACTION` budget. Supported scenarios include safe search, unauthorized updates, high-risk approval, indirect prompt injection, external sensitive-data transfer, malformed arguments, and provider unavailability.
 
 ## Approval endpoints
 
@@ -112,7 +112,7 @@ POST /approvals/{approval_id}/approve
 POST /approvals/{approval_id}/reject
 ```
 
-`GET /approvals` supports `status`, `agent_id`, `tool_id`, `before`, `after`, `limit`, and `cursor`. Resolution accepts `{"note": "..."}`. If another resolver wins, the losing request returns `409 APPROVAL_ALREADY_RESOLVED` with the existing state. Rejection and expiry remove any dormant execution job that can no longer be released; the action request and audit events remain available.
+`GET /approvals` supports `status`, `agent_id`, `tool_id`, `before`, `after`, `limit`, and an opaque cursor. Results use `created_at DESC, id DESC`; the cursor encodes both fields for stable keyset pagination when timestamps tie. Resolution accepts `{"note": "..."}`. If another resolver wins, the losing request returns `409 APPROVAL_ALREADY_RESOLVED` with the existing state. Rejection and expiry cancel the associated job, clear its lease and retry schedule, cancel only a running attempt, and retain all execution history.
 
 ## Registry endpoints
 
@@ -140,7 +140,7 @@ POST   /tools/{tool_id}/activate
 POST   /tools/{tool_id}/deactivate
 ```
 
-Tool creation validates JSON Schema and requires an allowlisted `adapter_name`.
+Tool creation validates JSON Schema and requires an allowlisted `adapter_name`. Tool-call arguments use `Draft202012Validator` with `FormatChecker`, so schema formats such as `email` are enforced.
 
 ## Policy endpoints
 
@@ -163,7 +163,7 @@ GET  /audit-events/{event_id}
 POST /requests/{request_id}/replays
 ```
 
-Audit filtering supports request, agent, user, tool, event type, decision, risk, policy version, date range, text query, limit, and cursor. The text query matches action request IDs and reason codes. Replay accepts a `target_policy_version_id`, reports the original and replay decisions, appends a replay event, and always returns `execution_performed: false`.
+Audit filtering supports request, agent, user, tool, event type, decision, risk, policy version, date range, text query, limit, and an opaque cursor. Results use `created_at DESC, id DESC`; the cursor encodes both fields for stable keyset pagination when timestamps tie. The text query matches action request IDs and reason codes. Replay accepts a `target_policy_version_id`, reports the original and replay decisions, appends a replay event, and always returns `execution_performed: false`.
 
 ## Usage and execution inspection
 
@@ -176,6 +176,8 @@ PUT /budgets
 GET /execution-jobs
 GET /execution-jobs/{request_id}/attempts
 ```
+
+Budget payloads include `scope`, either `LLM_PROVIDER` or `GATEWAY_ACTION`. The default is `GATEWAY_ACTION` for backward-compatible direct tool-call configuration.
 
 ## Dashboard and mock state
 

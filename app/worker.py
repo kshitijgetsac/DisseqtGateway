@@ -3,13 +3,13 @@ import time
 from datetime import timedelta, timezone
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
-from .core import audit, cleanup_execution_job, reevaluate_before_execution
+from .core import audit, cancel_execution_job, reevaluate_before_execution
 from .db import Base, SessionLocal, engine
 from .models import Agent, AgentToolPermission, ActionRequest, Approval, ExecutionAttempt, ExecutionJob, MockCustomer, MockDocument, MockMessage, Tool, User, WorkerHeartbeat, now
 
 
 def cleanup_expired_approvals(db: Session) -> int:
-    """Expire pending approvals and remove jobs that can no longer execute."""
+    """Expire pending approvals and cancel jobs while retaining their history."""
     current = now()
     approvals = db.scalars(select(Approval).where(
         Approval.status == "PENDING", Approval.expires_at <= current,
@@ -18,7 +18,7 @@ def cleanup_expired_approvals(db: Session) -> int:
         req = db.scalar(select(ActionRequest).where(ActionRequest.id == approval.request_id).with_for_update())
         approval.status = "EXPIRED"
         req.status = "EXPIRED"
-        cleanup_execution_job(db, req, "APPROVAL_EXPIRED")
+        cancel_execution_job(db, req, "APPROVAL_EXPIRED")
         audit(db, "APPROVAL_EXPIRED", request=req, details={"approval_id": approval.id})
     if approvals:
         db.commit()
@@ -121,7 +121,11 @@ def finish_job(db: Session, request_id: str, worker_id: str):
         ExecutionAttempt.attempt_number == job.attempt_count))
     authorization_failure = execution_authorization_failure(db, req)
     if authorization_failure:
+        original_decision = req.current_decision
         req.status = "CANCELLED"
+        req.current_decision = "DENY"
+        req.reason_code = authorization_failure
+        req.reason = "Execution authorization was revoked before the tool could run."
         job.status = "CANCELLED"
         job.last_error = authorization_failure
         job.lease_until = None
@@ -129,7 +133,9 @@ def finish_job(db: Session, request_id: str, worker_id: str):
         attempt.completed_at = now()
         attempt.error_code = authorization_failure
         audit(db, "EXECUTION_AUTHORIZATION_REVOKED", request=req, actor_type="WORKER", actor_id=worker_id,
-              reason_code=authorization_failure, details={"attempt_number": job.attempt_count})
+              policy_version_id=req.current_policy_version_id, decision="DENY",
+              reason_code=authorization_failure,
+              details={"attempt_number": job.attempt_count, "original_policy_decision": original_decision})
         db.commit()
         return
     try:

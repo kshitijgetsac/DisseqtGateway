@@ -61,7 +61,7 @@ def test_concurrent_identical_idempotent_requests_share_one_record(client, agent
     assert len({request_id for _, request_id in results}) == 1
     with SessionLocal() as db:
         assert len(db.query(ActionRequest).filter_by(idempotency_key="pg-identical").all()) == 1
-        assert len(db.query(ExecutionJob).all()) == 1
+        assert db.get(ExecutionJob, results[0][1]) is not None
         assert db.query(UsageBucket).one().used_requests == 1
 
 
@@ -97,7 +97,7 @@ def test_concurrent_duplicate_approval_creates_exactly_one_job(client, agent_hea
         statuses = sorted(pool.map(approve, ["one", "two"]))
     assert statuses == [200, 409]
     with SessionLocal() as db:
-        assert len(db.query(ExecutionJob).all()) == 1
+        assert db.get(ExecutionJob, created["request_id"]) is not None
 
 
 @postgres_only

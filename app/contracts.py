@@ -83,5 +83,6 @@ class ReplayIn(BaseModel):
 class BudgetIn(BaseModel):
     agent_id: str
     model: str = "mock-secure-v1"
+    scope: Literal["GATEWAY_ACTION", "LLM_PROVIDER"] = "GATEWAY_ACTION"
     request_limit: int = Field(gt=0)
     token_limit: int = Field(gt=0)

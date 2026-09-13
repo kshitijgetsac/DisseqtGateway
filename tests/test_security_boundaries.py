@@ -3,7 +3,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
-from app.models import ActionRequest, Approval, AuditEvent, ExecutionJob, MockMessage, now
+from app.models import ActionRequest, Approval, AuditEvent, ExecutionJob, MockMessage, UsageBucket, now
 from app.policy import evaluate
 from app.worker import tick
 from conftest import tool_call
@@ -172,6 +172,8 @@ def test_unsafe_policy_and_tool_configuration_is_rejected(client, admin_headers)
 
 
 def test_token_budget_is_enforced_before_request_creation(client, agent_headers, admin_headers):
+    with SessionLocal() as db:
+        before = db.scalar(select(func.count()).select_from(ActionRequest))
     configured = client.put("/api/v1/budgets", headers=admin_headers, json={
         "agent_id": FULL_AGENT_ID, "model": "mock-secure-v1", "request_limit": 100, "token_limit": 1,
     })
@@ -179,16 +181,55 @@ def test_token_budget_is_enforced_before_request_creation(client, agent_headers,
     response = client.post("/api/v1/tool-calls", headers={**agent_headers, "Idempotency-Key": "token-budget"}, json=tool_call())
     assert (response.status_code, response.json()["error"]["code"]) == (429, "BUDGET_EXHAUSTED")
     with SessionLocal() as db:
-        assert db.scalar(select(func.count()).select_from(ActionRequest)) == 0
+        assert db.scalar(select(func.count()).select_from(ActionRequest)) == before
 
 
-def test_provider_unavailability_is_audited(client, admin_headers):
+def test_provider_unavailability_is_audited_and_charges_only_input(client, admin_headers):
+    with SessionLocal() as db:
+        before = db.scalar(select(func.count()).select_from(AuditEvent).where(
+            AuditEvent.event_type == "LLM_PROVIDER_UNAVAILABLE"))
     response = client.post("/api/v1/agent-runs", headers=admin_headers, json={
         "agent_id": FULL_AGENT_ID, "user_id": ADMIN_ID, "prompt": "test", "scenario": "PROVIDER_UNAVAILABLE",
     })
     assert (response.status_code, response.json()["error"]["code"]) == (503, "PROVIDER_UNAVAILABLE")
     with SessionLocal() as db:
-        assert db.scalar(select(func.count()).select_from(AuditEvent).where(AuditEvent.event_type == "LLM_PROVIDER_UNAVAILABLE")) == 1
+        assert db.scalar(select(func.count()).select_from(AuditEvent).where(
+            AuditEvent.event_type == "LLM_PROVIDER_UNAVAILABLE")) == before + 1
+        bucket = db.scalar(select(UsageBucket).where(UsageBucket.scope == "LLM_PROVIDER"))
+        assert (bucket.used_requests, bucket.used_tokens) == (1, 1)
+
+
+def test_provider_budget_is_reserved_before_provider_invocation(client, admin_headers, monkeypatch):
+    client.put("/api/v1/budgets", headers=admin_headers, json={
+        "agent_id": FULL_AGENT_ID, "model": "mock-secure-v1", "scope": "LLM_PROVIDER",
+        "request_limit": 100, "token_limit": 1,
+    })
+    invoked = False
+
+    def unexpected_invocation(_):
+        nonlocal invoked
+        invoked = True
+        raise AssertionError("provider must not run after budget rejection")
+
+    monkeypatch.setattr("app.controllers.api.invoke_mock_provider", unexpected_invocation)
+    response = client.post("/api/v1/agent-runs", headers=admin_headers, json={
+        "agent_id": FULL_AGENT_ID, "user_id": ADMIN_ID, "prompt": "requires more than one token",
+        "scenario": "SAFE_INTERNAL_DOCUMENT_SEARCH",
+    })
+    assert (response.status_code, response.json()["error"]["code"]) == (429, "BUDGET_EXHAUSTED")
+    assert invoked is False
+
+
+def test_agent_run_tracks_provider_and_gateway_action_budgets_separately(client, admin_headers):
+    response = client.post("/api/v1/agent-runs", headers=admin_headers, json={
+        "agent_id": FULL_AGENT_ID, "user_id": ADMIN_ID, "prompt": "find the customer report",
+        "scenario": "SAFE_INTERNAL_DOCUMENT_SEARCH",
+    })
+    assert response.status_code == 200
+    with SessionLocal() as db:
+        buckets = db.scalars(select(UsageBucket).where(UsageBucket.agent_id == FULL_AGENT_ID)).all()
+        assert {bucket.scope for bucket in buckets} == {"LLM_PROVIDER", "GATEWAY_ACTION"}
+        assert all(bucket.used_requests == 1 for bucket in buckets)
 
 
 def test_approval_views_redact_message_content(client, agent_headers, admin_headers):
@@ -206,3 +247,9 @@ def test_audit_text_search_accepts_action_id(client, agent_headers, admin_header
     assert response.status_code == 200
     assert response.json()["items"]
     assert {event["request_id"] for event in response.json()["items"]} == {created["request_id"]}
+
+
+def test_json_schema_email_format_is_enforced(client, agent_headers):
+    response = client.post("/api/v1/tool-calls", headers={**agent_headers, "Idempotency-Key": "invalid-email"},
+        json=tool_call("messages.send", {"destination": "not-an-email", "message": "ordinary summary"}))
+    assert (response.status_code, response.json()["error"]["code"]) == (422, "INVALID_TOOL_ARGUMENTS")

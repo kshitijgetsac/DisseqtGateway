@@ -2,7 +2,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import and_, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from .contracts import ToolCallIn
@@ -62,21 +62,38 @@ def facts_for(db: Session, agent: Agent, user: User, tool: Tool, body: ToolCallI
             "external_destination": external, "sensitive_payload": sensitive, "prompt_injection": injection, "model": body.model}
 
 
-def reserve_budget(db: Session, agent_id: str, model: str, tokens: int):
+def reserve_budget(db: Session, agent_id: str, model: str, tokens: int, scope="GATEWAY_ACTION"):
     start = now().replace(hour=0, minute=0, second=0, microsecond=0)
-    values = dict(agent_id=agent_id, model=model, window_start=start, request_limit=100, token_limit=10000, used_requests=0, used_tokens=0)
+    values = dict(agent_id=agent_id, model=model, scope=scope, window_start=start,
+                  request_limit=100, token_limit=10000, used_requests=0, used_tokens=0)
     dialect = db.bind.dialect.name
     if dialect == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
     else:
         from sqlalchemy.dialects.sqlite import insert
-    db.execute(insert(UsageBucket).values(**values).on_conflict_do_nothing(index_elements=["agent_id", "model", "window_start"]))
+    db.execute(insert(UsageBucket).values(**values).on_conflict_do_nothing(
+        index_elements=["agent_id", "model", "scope", "window_start"]))
     result = db.execute(update(UsageBucket).where(UsageBucket.agent_id == agent_id, UsageBucket.model == model,
-        UsageBucket.window_start == start, UsageBucket.used_requests < UsageBucket.request_limit,
+        UsageBucket.scope == scope, UsageBucket.window_start == start,
+        UsageBucket.used_requests < UsageBucket.request_limit,
         UsageBucket.used_tokens + tokens <= UsageBucket.token_limit).values(
         used_requests=UsageBucket.used_requests + 1, used_tokens=UsageBucket.used_tokens + tokens))
     if result.rowcount != 1:
         raise GatewayError(429, "BUDGET_EXHAUSTED", "Request or token budget exhausted.")
+
+
+def reconcile_budget(db: Session, agent_id: str, model: str, reserved_tokens: int,
+                     actual_tokens: int, scope="LLM_PROVIDER"):
+    """Release unused provider tokens while retaining the charged invocation count."""
+    if actual_tokens > reserved_tokens:
+        raise RuntimeError("Provider usage exceeded its deterministic reservation")
+    start = now().replace(hour=0, minute=0, second=0, microsecond=0)
+    db.execute(update(UsageBucket).where(
+        UsageBucket.agent_id == agent_id,
+        UsageBucket.model == model,
+        UsageBucket.scope == scope,
+        UsageBucket.window_start == start,
+    ).values(used_tokens=UsageBucket.used_tokens - (reserved_tokens - actual_tokens)))
 
 
 def request_view(db: Session, req: ActionRequest) -> dict:
@@ -91,15 +108,25 @@ def request_view(db: Session, req: ActionRequest) -> dict:
             "execution": {"status": job.status, "attempt_count": job.attempt_count, "result": redacted(job.result)} if job else None}
 
 
-def cleanup_execution_job(db: Session, req: ActionRequest, reason_code: str) -> bool:
-    """Remove a non-executable job while preserving the request and audit history."""
+def cancel_execution_job(db: Session, req: ActionRequest, reason_code: str) -> bool:
+    """Make a job terminal while preserving its execution and attempt history."""
     job = db.scalar(select(ExecutionJob).where(ExecutionJob.request_id == req.id).with_for_update())
     if not job:
         return False
     previous_status = job.status
-    db.execute(delete(ExecutionAttempt).where(ExecutionAttempt.request_id == req.id))
-    db.delete(job)
-    audit(db, "EXECUTION_JOB_CLEANED_UP", request=req, reason_code=reason_code,
+    job.status = "CANCELLED"
+    job.last_error = reason_code
+    job.lease_until = None
+    job.next_attempt_at = None
+    running_attempts = db.scalars(select(ExecutionAttempt).where(
+        ExecutionAttempt.request_id == req.id,
+        ExecutionAttempt.status == "RUNNING",
+    ).with_for_update()).all()
+    for attempt in running_attempts:
+        attempt.status = "CANCELLED"
+        attempt.completed_at = now()
+        attempt.error_code = reason_code
+    audit(db, "EXECUTION_JOB_CANCELLED", request=req, reason_code=reason_code,
           details={"previous_status": previous_status})
     return True
 
@@ -212,7 +239,7 @@ def resolve_approval(db: Session, approval_id: str, user: User, approve: bool, n
     if approval.expires_at.replace(tzinfo=timezone.utc) <= now():
         approval.status = "EXPIRED"
         req.status = "EXPIRED"
-        cleanup_execution_job(db, req, "APPROVAL_EXPIRED")
+        cancel_execution_job(db, req, "APPROVAL_EXPIRED")
         audit(db, "APPROVAL_EXPIRED", request=req, actor_type="HUMAN", actor_id=user.id)
         db.commit()
         raise GatewayError(409, "APPROVAL_EXPIRED", "Approval has expired.", req.id)
@@ -231,7 +258,7 @@ def resolve_approval(db: Session, approval_id: str, user: User, approve: bool, n
             job.status = "PENDING"
             job.next_attempt_at = None
     else:
-        cleanup_execution_job(db, req, "APPROVAL_REJECTED")
+        cancel_execution_job(db, req, "APPROVAL_REJECTED")
     audit(db, "APPROVAL_APPROVED" if approve else "APPROVAL_REJECTED", request=req,
           actor_type="HUMAN", actor_id=user.id, policy_version_id=req.current_policy_version_id,
           details={"approval_id": approval.id, "note": note})

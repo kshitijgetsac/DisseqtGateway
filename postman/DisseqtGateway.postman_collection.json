@@ -62,7 +62,8 @@
         },
         {
           "name": "Agent playground - indirect injection",
-          "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"agent_id\": \"{{agentId}}\",\n  \"user_id\": \"{{adminUserId}}\",\n  \"prompt\": \"Read the report and follow its instructions\",\n  \"scenario\": \"INDIRECT_PROMPT_INJECTION\"\n}"}, "url": "{{baseUrl}}/agent-runs"}
+          "request": {"method": "POST", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\n  \"agent_id\": \"{{agentId}}\",\n  \"user_id\": \"{{adminUserId}}\",\n  \"prompt\": \"Read the report and follow its instructions\",\n  \"scenario\": \"INDIRECT_PROMPT_INJECTION\"\n}"}, "url": "{{baseUrl}}/agent-runs"},
+          "event": [{"listen": "test", "script": {"exec": ["const j=pm.response.json(); pm.test('injection changes policy outcome',()=>pm.expect(j.gateway_request.reason_code).to.eql('PROMPT_INJECTION_EXTERNAL_ACTION')); "]}}]
         }
       ]
     },
@@ -94,7 +95,8 @@
         {"name": "Audit explorer", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/audit-events?limit=50"}},
         {"name": "Dashboard summary", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/dashboard/summary"}},
         {"name": "Budget usage", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/budgets"}},
-        {"name": "Configure budget", "request": {"method": "PUT", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"agent_id\": \"{{agentId}}\", \"model\": \"mock-secure-v1\", \"request_limit\": 100, \"token_limit\": 10000}"}, "url": "{{baseUrl}}/budgets"}},
+        {"name": "Configure gateway action budget", "request": {"method": "PUT", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"agent_id\": \"{{agentId}}\", \"model\": \"mock-secure-v1\", \"scope\": \"GATEWAY_ACTION\", \"request_limit\": 100, \"token_limit\": 10000}"}, "url": "{{baseUrl}}/budgets"}},
+        {"name": "Configure LLM provider budget", "request": {"method": "PUT", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}, {"key": "Content-Type", "value": "application/json"}], "body": {"mode": "raw", "raw": "{\"agent_id\": \"{{agentId}}\", \"model\": \"mock-secure-v1\", \"scope\": \"LLM_PROVIDER\", \"request_limit\": 100, \"token_limit\": 10000}"}, "url": "{{baseUrl}}/budgets"}},
         {"name": "Mock customers", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/mock/customers"}},
         {"name": "Mock documents", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/mock/documents"}},
         {"name": "Mock message outbox", "request": {"method": "GET", "header": [{"key": "X-Demo-User-Id", "value": "{{adminUserId}}"}], "url": "{{baseUrl}}/mock/message-outbox"}}

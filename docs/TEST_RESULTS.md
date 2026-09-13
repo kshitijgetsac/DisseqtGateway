@@ -30,6 +30,7 @@ Status: **Passed**
 Status: **Passed**
 
 - Retrieved content containing prompt injection cannot bypass gateway policy.
+- The same external-send arguments require approval with normal retrieved context and are denied with `PROMPT_INJECTION_EXTERNAL_ACTION` when the context contains prompt injection.
 - Sending sensitive information to an external destination is denied.
 - A denied external message creates no execution job or tool effect.
 - Replay evaluates historical request facts under another policy version.
@@ -42,4 +43,4 @@ All three manual validation groups passed. Together they exercise deterministic 
 
 ## Automated regression result
 
-After the manual validation, the automated suite was expanded to cover additional authentication, authorization, lifecycle, approval expiry, simulation isolation, retry, lease, redaction, configuration, and concurrency boundaries. On 13 September 2026, all **38 tests passed against PostgreSQL**, including six database-concurrency tests. The only test-run warning is a deprecation notice from Starlette's test client dependency and does not affect application behavior.
+After the manual validation, the automated suite was expanded to **50 tests** covering authentication, authorization, lifecycle, JSON Schema formats, approval expiry, preserved cancellation history, tied-timestamp pagination, provider and action budgets, provider failure accounting, representative seed consistency, simulation isolation, retry, lease, redaction, configuration, and concurrency boundaries. The final PostgreSQL-backed Compose run passed **50 tests**. SQLite remains available for a fast local run, while the six PostgreSQL-only tests should be run in Compose because they depend on PostgreSQL row-lock semantics.

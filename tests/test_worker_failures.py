@@ -114,7 +114,11 @@ def test_worker_rechecks_agent_permission_immediately_before_execution(client, a
             AuditEvent.request_id == created["request_id"],
             AuditEvent.event_type == "EXECUTION_AUTHORIZATION_REVOKED",
         ))
+        request = db.get(ActionRequest, created["request_id"])
+        assert (request.current_decision, event.decision) == ("DENY", "DENY")
         assert event.reason_code == "AGENT_TOOL_PERMISSION_REVOKED"
+        assert event.policy_version_id == request.current_policy_version_id
+        assert event.details == {"attempt_number": 1, "original_policy_decision": "REQUIRE_APPROVAL"}
 
 
 def test_worker_cleans_up_job_when_pending_approval_expires(client, agent_headers):
@@ -130,7 +134,9 @@ def test_worker_cleans_up_job_when_pending_approval_expires(client, agent_header
     with SessionLocal() as db:
         assert db.get(Approval, created["approval_id"]).status == "EXPIRED"
         assert db.get(ActionRequest, created["request_id"]).status == "EXPIRED"
-        assert db.get(ExecutionJob, created["request_id"]) is None
+        job = db.get(ExecutionJob, created["request_id"])
+        assert (job.status, job.last_error, job.lease_until, job.next_attempt_at) == (
+            "CANCELLED", "APPROVAL_EXPIRED", None, None)
 
 
 def test_rejection_cleans_up_awaiting_approval_job(client, agent_headers, admin_headers):
@@ -144,4 +150,34 @@ def test_rejection_cleans_up_awaiting_approval_job(client, agent_headers, admin_
                            json={"note": "rights not granted"})
     assert rejected.status_code == 200
     with SessionLocal() as db:
-        assert db.get(ExecutionJob, created["request_id"]) is None
+        job = db.get(ExecutionJob, created["request_id"])
+        assert (job.status, job.last_error, job.lease_until, job.next_attempt_at) == (
+            "CANCELLED", "APPROVAL_REJECTED", None, None)
+
+
+def test_cancelling_job_preserves_completed_attempts_and_only_cancels_running_attempt(client, agent_headers, admin_headers):
+    created = client.post("/api/v1/tool-calls", headers={**agent_headers, "Idempotency-Key": "attempt-history"},
+        json=tool_call("customers.update", {"customer_id": "00000000-0000-0000-0000-000000000020", "status": "SUSPENDED"})).json()
+    with SessionLocal() as db:
+        db.add(ExecutionJob(request_id=created["request_id"], status="RUNNING", attempt_count=4,
+                            worker_id="stale-worker", lease_until=now() + timedelta(seconds=30),
+                            next_attempt_at=now() + timedelta(seconds=60)))
+        db.flush()
+        db.add_all([
+            ExecutionAttempt(request_id=created["request_id"], attempt_number=1, status="FAILED"),
+            ExecutionAttempt(request_id=created["request_id"], attempt_number=2, status="LEASE_EXPIRED"),
+            ExecutionAttempt(request_id=created["request_id"], attempt_number=3, status="SUCCEEDED"),
+            ExecutionAttempt(request_id=created["request_id"], attempt_number=4, status="RUNNING"),
+        ])
+        db.commit()
+
+    response = client.post(f"/api/v1/approvals/{created['approval_id']}/reject", headers=admin_headers,
+                           json={"note": "cancel and preserve history"})
+    assert response.status_code == 200
+    with SessionLocal() as db:
+        job = db.get(ExecutionJob, created["request_id"])
+        attempts = db.scalars(select(ExecutionAttempt).where(
+            ExecutionAttempt.request_id == created["request_id"],
+        ).order_by(ExecutionAttempt.attempt_number)).all()
+        assert job.status == "CANCELLED"
+        assert [attempt.status for attempt in attempts] == ["FAILED", "LEASE_EXPIRED", "SUCCEEDED", "CANCELLED"]

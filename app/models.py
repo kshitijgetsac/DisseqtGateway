@@ -131,10 +131,11 @@ class ExecutionAttempt(Base):
 
 class UsageBucket(Base):
     __tablename__ = "usage_buckets"
-    __table_args__ = (UniqueConstraint("agent_id", "model", "window_start"),)
+    __table_args__ = (UniqueConstraint("agent_id", "model", "scope", "window_start"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uid)
     agent_id: Mapped[str] = mapped_column(ForeignKey("agents.id"))
     model: Mapped[str] = mapped_column(String(100))
+    scope: Mapped[str] = mapped_column(String(30), default="GATEWAY_ACTION")
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     request_limit: Mapped[int] = mapped_column(Integer, default=100)
     token_limit: Mapped[int] = mapped_column(Integer, default=10000)

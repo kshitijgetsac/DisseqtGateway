@@ -34,6 +34,8 @@ docker compose down -v
 docker compose up --build
 ```
 
+The current schema separates provider and gateway-action budget buckets. If upgrading an older local checkout that already has a `gateway_db` volume, run the reset command once because this compact POC uses metadata creation rather than migrations.
+
 ## Architecture
 
 This is a modular MVC-style monolith with one separately launched worker and a static React frontend:
@@ -58,7 +60,7 @@ The frontend is a Vite React application in `frontend/`. Its pages cover the das
 
 The worker uses `SELECT ... FOR UPDATE SKIP LOCKED`, commits a short lease before execution, and records each attempt. Directly allowed and human-approved requests enter the same execution path. Immediately before calling an adapter, the worker locks and rechecks the agent, user, tool, ownership, and agent-tool permission. Revoked authorization cancels the attempt without performing the side effect. The mock message adapter stores the request ID as a unique idempotency key, so retrying a job cannot create a second message.
 
-Each worker tick also expires overdue approvals. Rejected or expired approvals remove any dormant `AWAITING_APPROVAL` execution job while preserving the action request and append-oriented audit explanation.
+Each worker tick also expires overdue approvals. Rejected or expired approvals mark any associated job `CANCELLED`, clear its lease and retry schedule, and retain all prior execution attempts. A currently running attempt is cancelled; completed, failed, and lease-expired attempts remain unchanged.
 
 For a real external tool, the adapter must pass the stable request ID to an idempotency-aware provider. If the provider cannot offer idempotency or reconciliation, a crash after the external side effect and before its receipt is recorded must end as `OUTCOME_UNKNOWN`, not an unsafe automatic retry.
 
@@ -73,12 +75,14 @@ Published policy versions are immutable. Policy rules are validated and stored a
 
 The audit event stores the policy version, matched winning-tier rule IDs, winning priority, decision, reason code, evaluated facts, and request digest. If policy changes before a worker claims a job, the worker re-evaluates the immutable request facts. A new `REQUIRE_APPROVAL` decision invalidates the old approval and creates a fresh one.
 
+The seeded policy explicitly denies external actions influenced by detected prompt injection at priority 95. This makes the security finding change the policy outcome independently of sensitive-content detection.
+
 Simulation never creates an action request. Replay records a `POLICY_REPLAYED` audit event and cannot create or release an execution job.
 
 ## Security boundaries and assumptions
 
 - Tool names resolve only to registered, active, allowlisted Python adapters. Model output never selects arbitrary Python, URLs, or shell commands.
-- Every tool has a closed JSON Schema with `additionalProperties: false`.
+- Every tool has a closed JSON Schema with `additionalProperties: false`; validation uses the Draft 2020-12 format checker, including the seeded email format.
 - Agent-provided classification labels are ignored. A trusted classification can come from a server-side lookup of a seeded document artifact.
 - For this POC, an agent may act only for its registered owner. A production delegation table or identity claim can broaden that relationship explicitly.
 - Prompt-injection findings contribute facts to policy but cannot grant permissions or override a denial.
@@ -86,6 +90,12 @@ Simulation never creates an action request. Replay records a `POLICY_REPLAYED` a
 - Human identity uses a demo header. Agent API keys are SHA-256 digests at rest; newly generated keys are shown once.
 - Audit details are append-oriented through the application and redact common content-bearing fields. Production immutability would also use a restricted database role or append-only audit sink.
 - Database setup uses SQLAlchemy metadata creation to keep the demo compact. Production evolution should use Alembic migrations.
+
+## Usage accounting
+
+Budgets have two explicit scopes. `LLM_PROVIDER` is reserved before `/agent-runs` invokes the deterministic provider. A successful call releases unused reserved output tokens and charges deterministic actual usage. A provider outage charges the input tokens and releases the output allowance. `GATEWAY_ACTION` is charged when an already-produced proposal enters `/tool-calls`; `/agent-runs` also passes its provider result through that same action budget.
+
+Fresh installations seed a coherent security story for the dashboard and audit explorer: successful execution, sensitive-data and prompt-injection denials, pending and rejected approvals, authorization failure, provider outage, and a side-effect-free replay.
 
 ## API contract review
 
@@ -110,11 +120,11 @@ Run the local suite:
 python3 -m pytest -q
 ```
 
-The suite covers policy priority and effect precedence, default deny, authentication and authorization, agent and tool lifecycle, key rotation, malformed arguments, idempotency, approval expiry and resolution, stale-job cleanup, budget enforcement, untrusted classification, sensitive-data exfiltration, simulation and replay isolation, worker retries and lease recovery, stale-worker fencing, permission revocation before execution, and policy changes before execution.
+The suite covers policy priority and effect precedence, default deny, authentication and authorization, agent and tool lifecycle, key rotation, JSON Schema formats, idempotency, approval expiry and resolution, execution-history preservation, stable keyset pagination, scoped budget enforcement, provider reservation and failure accounting, seeded records, untrusted classification, prompt injection, sensitive-data exfiltration, simulation and replay isolation, worker retries and lease recovery, stale-worker fencing, permission revocation before execution, and policy changes before execution.
 
 PostgreSQL provides the production POC's row-lock semantics. SQLite is used only as a fast local test database; it does not emulate PostgreSQL row-level locking. Approval and idempotency race demonstrations should therefore be run against the Compose environment.
 
-To run every test, including the two real row-lock races, create an isolated test database once and execute the suite in the API image:
+To run every test, including the PostgreSQL row-lock races, create an isolated test database once and execute the suite in the API image:
 
 ```bash
 docker compose exec db createdb -U gateway gateway_test
@@ -125,7 +135,7 @@ docker compose run --rm \
 
 The test fixture recreates every table in `gateway_test`, so never point `TEST_DATABASE_URL` at a database containing data.
 
-The complete suite currently contains 42 tests. Six PostgreSQL-only tests exercise concurrent approval resolution, duplicate approval, atomic budget exhaustion, identical and conflicting idempotency-key races, and competing worker claims.
+The complete suite currently contains 50 tests. Six PostgreSQL-only tests exercise concurrent approval resolution, duplicate approval, atomic budget exhaustion, identical and conflicting idempotency-key races, and competing worker claims.
 
 ## AI usage
 

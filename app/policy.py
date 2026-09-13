@@ -1,4 +1,4 @@
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 from .errors import GatewayError
 
 
@@ -53,6 +53,6 @@ def validate_tool_schema(schema: dict):
 
 
 def validate_arguments(schema: dict, arguments: dict):
-    errors = list(Draft202012Validator(schema).iter_errors(arguments))
+    errors = list(Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(arguments))
     if errors:
         raise GatewayError(422, "INVALID_TOOL_ARGUMENTS", errors[0].message)
