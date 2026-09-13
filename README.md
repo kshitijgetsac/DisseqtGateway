@@ -1,6 +1,8 @@
 # Disseqt AI Security Governance Gateway
 
-A working backend POC for governing AI-agent tool calls. The gateway treats model output and retrieved content as untrusted, authenticates the calling agent, validates tool arguments, checks explicit permissions, applies deterministic versioned policy, coordinates human approval, executes allowlisted mock tools through a durable PostgreSQL job, and records an append-oriented audit trail.
+A working POC for governing AI-agent tool calls. The gateway treats model output and retrieved content as untrusted, authenticates the calling agent, validates tool arguments, checks explicit permissions, applies deterministic versioned policy, coordinates human approval, executes allowlisted mock tools through a durable PostgreSQL job, and records an append-oriented audit trail.
+
+[Watch the video demo](https://youtu.be/0pvEHSkUwVw).
 
 ## Run the application
 
